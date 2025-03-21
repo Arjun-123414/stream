@@ -94,81 +94,82 @@ def get_allowed_tables_for_user(user_email: str) -> List[str]:
 
 def extract_tables_from_query(query: str) -> Set[str]:
     """
-    Extract table names from a SQL query, properly handling function calls and column references.
-    Uses a more sophisticated approach to avoid misidentifying columns or functions as tables.
+    Extract table names from a SQL query using advanced parsing techniques.
+    Properly distinguishes between tables, columns, aliases, and functions.
     """
-    # Clean and normalize query
+    # Clean and normalize the query
+    query = re.sub(r'--.*$', ' ', query, flags=re.MULTILINE)
+    query = re.sub(r'/\*.*?\*/', ' ', query, flags=re.DOTALL)
     query = query.strip()
 
-    # Use sqlparse to format and tokenize the query
     try:
-        # If sqlparse is available, use it for better parsing
+        # Try to use sqlparse for more accurate parsing
+        import sqlparse
         parsed = sqlparse.parse(query)[0]
+
+        # Initialize set for table names
         tables = set()
 
-        # Process the FROM clause to extract main tables
-        from_seen = False
-        from_clause_tokens = []
+        # Helper function to process token lists
+        def process_token_list(token_list, context=None):
+            current_context = context
+            prev_token = None
 
-        for token in parsed.tokens:
-            # Look for FROM keyword
-            if token.ttype is sqlparse.tokens.Keyword and token.value.upper() == 'FROM':
-                from_seen = True
-                continue
+            for token in token_list:
+                # Track context based on keywords
+                if token.ttype is sqlparse.tokens.Keyword:
+                    upper_val = token.value.upper()
+                    if upper_val in ('FROM', 'JOIN', 'INTO', 'UPDATE'):
+                        current_context = 'TABLE'
+                    elif upper_val in ('SELECT', 'WHERE', 'GROUP', 'ORDER', 'HAVING', 'LIMIT', 'BY', 'AS'):
+                        current_context = 'OTHER'
 
-            # Collect tokens after FROM until we hit another clause
-            if from_seen:
-                if token.ttype is sqlparse.tokens.Keyword and token.value.upper() in (
-                'WHERE', 'GROUP', 'ORDER', 'HAVING', 'LIMIT'):
-                    from_seen = False
-                else:
-                    from_clause_tokens.append(token)
+                # Process based on context
+                if current_context == 'TABLE' and prev_token and prev_token.ttype is sqlparse.tokens.Keyword:
+                    if prev_token.value.upper() in ('FROM', 'JOIN', 'INTO', 'UPDATE'):
+                        if isinstance(token, sqlparse.sql.Identifier):
+                            # This is likely a table name
+                            tables.add(token.get_real_name().upper())
+                        elif isinstance(token, sqlparse.sql.IdentifierList):
+                            # Multiple tables in a list (FROM t1, t2)
+                            for item in token.get_identifiers():
+                                tables.add(item.get_real_name().upper())
 
-        # Extract table names from the FROM clause tokens
-        current_table = ""
-        for token in from_clause_tokens:
-            if token.ttype in (
-            sqlparse.tokens.Name, sqlparse.tokens.Literal.String.Single, sqlparse.tokens.Literal.String.Symbol):
-                current_table = token.value.strip('"\'')
-                tables.add(current_table.upper())
-            elif isinstance(token, sqlparse.sql.Identifier):
-                current_table = token.get_real_name().strip('"\'')
-                tables.add(current_table.upper())
+                # Recursively process token lists
+                if hasattr(token, 'tokens'):
+                    process_token_list(token.tokens, current_context)
 
-        # Also look for JOIN clauses
-        join_seen = False
-        current_identifier = ""
+                prev_token = token
 
-        for token in parsed.tokens:
-            if token.ttype is sqlparse.tokens.Keyword and 'JOIN' in token.value.upper():
-                join_seen = True
-                continue
+        # Start processing tokens
+        process_token_list(parsed.tokens)
 
-            if join_seen:
-                if isinstance(token, sqlparse.sql.Identifier):
-                    current_identifier = token.get_real_name().strip('"\'')
-                    tables.add(current_identifier.upper())
-                    join_seen = False
-                elif token.ttype in (
-                sqlparse.tokens.Name, sqlparse.tokens.Literal.String.Single, sqlparse.tokens.Literal.String.Symbol):
-                    current_identifier = token.value.strip('"\'')
-                    tables.add(current_identifier.upper())
-                    join_seen = False
+        # If we found tables, return them
+        if tables:
+            return tables
+
+        # Fallback: if sqlparse didn't find tables (can happen with complex queries),
+        # use a more direct approach just for FROM clauses
+        from_clause = re.search(r'FROM\s+([^WHERE|GROUP|ORDER|HAVING|LIMIT|;]+)', query, re.IGNORECASE)
+        if from_clause:
+            from_text = from_clause.group(1).strip()
+
+            # Extract table names from the FROM clause
+            # Handle quoted identifiers and aliases
+            tables_in_from = re.findall(r'(?:"([^"]+)"|([a-zA-Z0-9_]+))(?:\s+(?:AS\s+)?[a-zA-Z0-9_]+)?', from_text)
+
+            for table_match in tables_in_from:
+                table_name = next((name for name in table_match if name), None)
+                if table_name:
+                    tables.add(table_name.upper())
 
         return tables
 
-    except (ImportError, IndexError):
-        # Fallback to regex-based extraction if sqlparse fails or isn't available
-        # This regex specifically looks for tables after FROM and JOIN keywords
-        # It avoids capturing functions like EXTRACT() or column references
+    except (ImportError, IndexError, AttributeError):
+        # Fallback to regex-only approach if sqlparse is not available or fails
         tables = set()
 
-        # Clean up the query - remove comments, normalize whitespace
-        query = re.sub(r'--.*$', ' ', query, flags=re.MULTILINE)
-        query = re.sub(r'/\*.*?\*/', ' ', query, flags=re.DOTALL)
-        query = re.sub(r'\s+', ' ', query)
-
-        # Pattern to match tables after FROM clauses
+        # Match tables after FROM clause
         from_pattern = r'FROM\s+(?:"([^"]+)"|([a-zA-Z0-9_]+))(?:\s+(?:AS\s+)?[a-zA-Z0-9_]+)?'
         from_matches = re.finditer(from_pattern, query, re.IGNORECASE)
 
@@ -177,7 +178,7 @@ def extract_tables_from_query(query: str) -> Set[str]:
             if table:
                 tables.add(table.upper())
 
-        # Pattern to match tables in JOIN clauses
+        # Match tables in JOIN clauses
         join_pattern = r'JOIN\s+(?:"([^"]+)"|([a-zA-Z0-9_]+))(?:\s+(?:AS\s+)?[a-zA-Z0-9_]+)?'
         join_matches = re.finditer(join_pattern, query, re.IGNORECASE)
 
