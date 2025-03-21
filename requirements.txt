@@ -8,3 +8,4 @@ streamlit
 groq
 streamlit-aggrid
 cryptography
+sqlparser
