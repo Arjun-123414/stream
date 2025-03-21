@@ -15,7 +15,7 @@ from snowflake_utils import query_snowflake, get_schema_details
 from groq_utils import get_groq_response
 from action_utils import parse_action_response, execute_action
 import streamlit as st
-from st_aggrid import AgGrid, GridOptionsBuilder
+from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
 from PIL import Image
 import base64
 from cryptography.hazmat.backends import default_backend
@@ -808,9 +808,13 @@ def main_app():
             st.rerun()
 
         # 4. Logout button
+        # 4. Logout button
         if st.button("Logout"):
+            # Clear all session state variables related to chat and queries
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            # Reinitialize only the authentication state
             st.session_state["authenticated"] = False
-            st.session_state["user"] = None
             st.rerun()
 
     # ----------------------------------
@@ -823,7 +827,14 @@ def main_app():
             gb = GridOptionsBuilder.from_dataframe(pdf)
             gb.configure_default_column(filter=True, sortable=True)
             gridOptions = gb.build()
-            AgGrid(pdf, gridOptions=gridOptions, height=400, width='100%')
+
+            # Add key parameter to AgGrid
+            AgGrid(pdf,
+                   gridOptions=gridOptions,
+                   height=400,
+                   width='100%',
+                   key=f"grid_{idx}_{id(pdf)}",  # Unique key based on index and dataframe id
+                   update_mode=GridUpdateMode.VALUE_CHANGED)
 
     st.title("❄️ AI Data Assistant ❄️")
     st.caption("Ask me about your business analytics queries")
@@ -867,7 +878,7 @@ def main_app():
          ```sql
              SELECT "dept" FROM "USERROLE" WHERE "empname" = '{user_email}';
 
-          - To get the department (dept) or role that the logged-in user does NOT have access to, use:
+          - To get the department (dept) or role that the logged-in user does NOT or dont or do not have access to, use:
          ```sql
             SELECT "dept" FROM ROLE 
             WHERE "dept" NOT IN (
@@ -987,15 +998,21 @@ def main_app():
                             df = pd.DataFrame(result)
 
                         # Continue with the rest of your code
-                        csv = df.to_csv(index=False).encode("utf-8")
+                        if len(df) > 1:  # Only show download button and grid for results with more than 1 row
+                            csv = df.to_csv(index=False).encode("utf-8")
 
-                        st.download_button(
-                            label="Download Full Dataset as CSV",
-                            data=csv,
-                            file_name="query_result.csv",
-                            mime="text/csv"
-                        )
-                        if len(df) > 1:
+                            # Create a container for the download button to isolate it
+                            download_container = st.container()
+                            with download_container:
+                                st.download_button(
+                                    label="Download Full Dataset as CSV",
+                                    data=csv,
+                                    file_name="query_result.csv",
+                                    mime="text/csv",
+                                    key=f"download_csv_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+                                    # Unique key to prevent conflicts
+                                )
+
                             st.session_state.persistent_dfs.append(df)
                             st.write("Complete Dataset Preview:")
                             gb = GridOptionsBuilder.from_dataframe(df)
@@ -1006,6 +1023,7 @@ def main_app():
                             natural_response = f"Query returned {num_rows} rows. Full data is above."
                             token_usage_second_call = 0
                         else:
+                            # For 1 or 0 rows, don't show download button or grid
                             result_for_messages = result
                             st.session_state.messages.append({"role": "assistant", "content": str(result_for_messages)})
                             natural_response, token_usage_second_call = get_groq_response(
@@ -1022,6 +1040,7 @@ def main_app():
                     else:
                         natural_response = "No valid result returned."
 
+                    # Continue with saving the query result and updating chat history
                     save_query_result(
                         prompt,
                         natural_response,
