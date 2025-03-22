@@ -680,10 +680,9 @@ def save_query_result(user_query, natural_language_response, result, sql_query, 
 # 8. Main Application
 # ---------------------------------------------
 def main_app():
+    # Display logged-in username at the top
     if "user" in st.session_state:
-        # username = st.session_state["user"].split("@")[0]
         username = st.session_state["user"]
-
         st.markdown(
             f"""
             <style>
@@ -722,6 +721,14 @@ def main_app():
         st.session_state.messages = []
         st.session_state.chat_history = []
 
+    # Initialize previous_context if not already initialized
+    if "previous_context" not in st.session_state:
+        st.session_state.previous_context = {
+            "last_query": "",
+            "last_sql": "",
+            "last_response": ""
+        }
+
     # ---- AUTOSAVE CHECK ----
     if AUTOSAVE_ENABLED:
         maybe_autosave_chat()
@@ -756,43 +763,31 @@ def main_app():
             # Group conversations by date
             conversations_by_date = {}
             for conv in user_conversations:
-                # Extract just the date part from the timestamp (format: YYYY-MM-DD)
                 date = conv['timestamp'].split(' ')[0]
-                if date not in conversations_by_date:
-                    conversations_by_date[date] = []
-                conversations_by_date[date].append(conv)
+                conversations_by_date.setdefault(date, []).append(conv)
 
             # Display conversations grouped by date
             for date, convs in conversations_by_date.items():
-                # Format date for display (e.g., "15-3-25" instead of "2025-03-15")
                 display_date = datetime.datetime.strptime(date, "%Y-%m-%d").strftime("%d-%m-%y")
-
-                # Create a date header with custom styling
                 st.markdown(f"""
                 <div style="background-color: #f0f2f6; padding: 5px; border-radius: 5px; margin-bottom: 5px;">
                     <span style="font-weight: bold; color: #1A237E;">{display_date}</span>
                 </div>
                 """, unsafe_allow_html=True)
-
-                # Display conversations for this date
                 for conv in convs:
-                    # Just show the title without the timestamp since we're already grouped by date
                     button_label = conv['title']
                     if st.button(button_label, key=f"btn_{conv['id']}"):
                         load_conversation_into_session(conv)
                         st.rerun()
 
         st.write("---")
-        # 3. New Chat button
         if st.button("🆕 New Chat"):
-            # Save the current conversation (if any)
             if st.session_state.chat_history:
                 save_chat_session_to_db(
                     user=st.session_state["user"],
                     messages=st.session_state.chat_history,
                     persistent_dfs=st.session_state.persistent_dfs
                 )
-            # Clear the active session
             st.session_state.pop("messages", None)
             st.session_state.pop("chat_history", None)
             st.session_state.pop("query_memory", None)
@@ -801,29 +796,20 @@ def main_app():
             st.session_state.pop("last_saved_message_count", None)
             st.rerun()
 
-        # Clear History button
         if st.button("🗑️ Clear History"):
             clear_chat_history(user_email)
             st.success("Chat history cleared!")
             st.rerun()
 
-        # 4. Logout button
-        # 4. Logout button
         if st.button("Logout"):
-            # Clear all session state variables related to chat and queries
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
-            # Reinitialize only the authentication state
             st.session_state["authenticated"] = False
             st.rerun()
 
-
-
-    # Replace the main display section (part B of your code) with this improved version
-
-    # ----------------------------------
-    #  B) MAIN: Chat interface
-    # ----------------------------------
+    # -------------------------------
+    #  B) MAIN: Chat Interface
+    # -------------------------------
     st.title("❄️ AI Data Assistant ❄️")
     st.caption("Ask me about your business analytics queries")
 
@@ -858,20 +844,22 @@ def main_app():
                - Every **table and column name** **MUST BE ENCLOSED** in double quotes exactly as in the schema. 
             9. ⚠️ MANDATORY: FOR ANY ANALYTICAL QUERY THAT INVOLVES COUNTING RECORD ALWAYS USE COUNT(DISTINCT column_name ) ⚠️
 
-             ## User Information
+            ## User Information
             - Logged-in User Email: {user_email}
 
             ## Role-Based Query Example
           - To get the department (dept) or role for the logged-in user, use:
          ```sql
              SELECT "dept" FROM "USERROLE" WHERE "empname" = '{user_email}';
+         ```
 
-          - To get the department (dept) or role that the logged-in user does NOT or dont or do not have access to, use:
+          - To get the department (dept) or role that the logged-in user does NOT have access to, use:
          ```sql
             SELECT "dept" FROM ROLE 
             WHERE "dept" NOT IN (
            SELECT "dept" FROM USERROLE WHERE "empname" = '{user_email}'
             ); 
+         ```
 
             ## Purchase Order Status Rules  
               - "po_details_view" tracks purchase orders.  
@@ -883,7 +871,6 @@ def main_app():
           ```sql
            WHERE "Purchase_Itm_StatusID" = 2 AND "Purchase_Itm_StatusID" <> 3
           ```  
-
 
             ## Paid Invoice Summary Instruction
              When a user asks for a "Paid Invoice Summary", generate the following Snowflake SQL query:
@@ -917,34 +904,26 @@ def main_app():
         {{"function_name": "query_snowflake",
           "function_parms": {{"query": "<Your SQL Query Here>"}}
         }}
-        ```  
+        ```
         """
-
-    # Fix for Issue 1 & 2: Modified code for chat history display and table generation logic
 
     if not st.session_state.messages:
         st.session_state.messages = [{"role": "system", "content": react_system_prompt}]
         st.session_state.chat_history = []
 
-    # Create chat_message_columns map to track which messages have tables
     if "chat_message_tables" not in st.session_state:
         st.session_state.chat_message_tables = {}
 
-    # Display the chat history in proper order, with tables integrated
+    # Display the chat history in order, integrating any result tables
     message_index = 0
     for msg_idx, msg in enumerate(st.session_state.chat_history):
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
-
-            # Check if this message has a corresponding table to display
             if msg["role"] == "assistant" and message_index in st.session_state.chat_message_tables:
                 df_idx = st.session_state.chat_message_tables[message_index]
                 if df_idx < len(st.session_state.persistent_dfs):
                     df = st.session_state.persistent_dfs[df_idx]
-
-                    # Only display download button and table if the dataframe is not empty
                     if not df.empty:
-                        # Display download button for this specific table
                         csv = df.to_csv(index=False).encode("utf-8")
                         st.download_button(
                             label="Download Full Dataset as CSV",
@@ -953,8 +932,6 @@ def main_app():
                             mime="text/csv",
                             key=f"download_csv_{message_index}_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
                         )
-
-                        # Display the table with filtering enabled
                         gb = GridOptionsBuilder.from_dataframe(df)
                         gb.configure_default_column(filter=True, sortable=True)
                         gridOptions = gb.build()
@@ -963,14 +940,14 @@ def main_app():
                             gridOptions=gridOptions,
                             height=400,
                             width='100%',
-                            key=f"grid_{message_index}_{df_idx}_{id(df)}",  # Unique key
+                            key=f"grid_{message_index}_{df_idx}_{id(df)}",
                             update_mode=GridUpdateMode.VALUE_CHANGED
                         )
-
         if msg["role"] == "assistant":
             message_index += 1
 
     if prompt := st.chat_input("Ask about your Snowflake data..."):
+        # Check for a cached response in query_memory first
         if prompt in st.session_state.query_memory:
             cached_response = st.session_state.query_memory[prompt]
             with st.chat_message("assistant"):
@@ -978,17 +955,47 @@ def main_app():
             st.session_state.messages.append({"role": "assistant", "content": cached_response})
             st.session_state.chat_history.append({"role": "assistant", "content": cached_response})
         else:
+            # Append the user message to the chat history
             st.session_state.messages.append({"role": "user", "content": prompt})
             st.session_state.chat_history.append({"role": "user", "content": prompt})
             with st.chat_message("user"):
                 st.markdown(prompt)
 
+            response_container = st.container()
+
+            # Determine if this is a follow-up based on query length or keywords
+            is_followup = len(prompt.split()) < 6 or any(x in prompt.lower() for x in
+                                                         ['what about', 'how about', 'and', 'also', 'instead',
+                                                          'compare', 'what if'])
+
             with st.spinner("Analyzing your query..."):
                 try:
-                    response_text, token_usage_first_call = get_groq_response(
-                        react_system_prompt,
-                        st.session_state.messages
-                    )
+                    # For follow-ups, use previous context to create a focused system prompt
+                    if is_followup and st.session_state.previous_context["last_query"]:
+                        focused_system_prompt = f"""
+                        {react_system_prompt}
+
+                        # Context from previous query
+                        Previous question: {st.session_state.previous_context["last_query"]}
+                        Previous SQL: {st.session_state.previous_context["last_sql"]}
+                        Previous result summary: {st.session_state.previous_context["last_response"]}
+
+                        The user's follow-up question "{prompt}" should be understood in context of the previous question.
+                        """
+                        focused_messages = [
+                            {"role": "system", "content": focused_system_prompt},
+                            {"role": "user", "content": prompt}
+                        ]
+                        response_text, token_usage_first_call = get_groq_response(
+                            focused_system_prompt,
+                            focused_messages
+                        )
+                    else:
+                        response_text, token_usage_first_call = get_groq_response(
+                            react_system_prompt,
+                            st.session_state.messages
+                        )
+
                     st.session_state.total_tokens += token_usage_first_call
                     action = parse_action_response(response_text)
                     if not action:
@@ -1001,48 +1008,29 @@ def main_app():
                     if isinstance(result, dict) and "error" in result:
                         natural_response = result["error"]
                     elif isinstance(result, list):
-                        # Pre-process the data to convert datetime objects to formatted strings
                         processed_result = []
-
-                        # Check if there are any datetime objects in the results
-                        has_datetime = False
-                        if result and isinstance(result[0], dict):
-                            for value in result[0].values():
-                                if isinstance(value, datetime.date) or isinstance(value, datetime.datetime):
-                                    has_datetime = True
-                                    break
-
-                        # Only do the conversion if datetime objects are detected
+                        has_datetime = any(isinstance(val, (datetime.date, datetime.datetime)) for val in
+                                           (result[0].values() if result else []))
                         if has_datetime:
                             for item in result:
-                                processed_item = {}
-                                for key, value in item.items():
-                                    if isinstance(value, datetime.date) or isinstance(value, datetime.datetime):
-                                        processed_item[key] = value.strftime('%Y-%m-%d')  # Format as YYYY-MM-DD
-                                    else:
-                                        processed_item[key] = value
+                                processed_item = {k: (
+                                    v.strftime('%Y-%m-%d') if isinstance(v, (datetime.date, datetime.datetime)) else v)
+                                                  for k, v in item.items()}
                                 processed_result.append(processed_item)
                             df = pd.DataFrame(processed_result)
                         else:
-                            # If no datetime objects, use the original data
                             df = pd.DataFrame(result)
 
-                        # Fix for Issue 2: Only show table if more than 1 row
                         num_rows = len(df)
-                        if num_rows > 1:  # Strict enforcement of the > 1 condition
-                            # Store the DataFrame in persistent_dfs
+                        if num_rows > 1:
                             df_idx = len(st.session_state.persistent_dfs)
                             st.session_state.persistent_dfs.append(df)
-
-                            # Associate this table with the current message
                             current_message_idx = len(
                                 [m for m in st.session_state.chat_history if m["role"] == "assistant"])
                             st.session_state.chat_message_tables[current_message_idx] = df_idx
-
                             natural_response = f"Query returned {num_rows} rows. The result is displayed below:"
                             token_usage_second_call = 0
                         else:
-                            # For 1 or 0 rows, don't show download button or grid
                             result_for_messages = result
                             st.session_state.messages.append({"role": "assistant", "content": str(result_for_messages)})
                             natural_response, token_usage_second_call = get_groq_response(
@@ -1059,7 +1047,7 @@ def main_app():
                     else:
                         natural_response = "No valid result returned."
 
-                    # Continue with saving the query result and updating chat history
+                    # Save query result and update chat history
                     save_query_result(
                         prompt,
                         natural_response,
@@ -1075,46 +1063,44 @@ def main_app():
                     st.session_state.chat_history.append({"role": "assistant", "content": natural_response})
                     st.session_state.query_memory[prompt] = natural_response
 
+                    # Save context for potential follow-ups
+                    st.session_state.previous_context = {
+                        "last_query": prompt,
+                        "last_sql": sql_query,
+                        "last_response": natural_response
+                    }
+
                     save_after_exchange()
 
-                    # Display the assistant response
-                    with st.chat_message("assistant"):
-                        st.markdown(natural_response)
-
-                        # Fix for Issue 1: Only display the table after we've fully generated the response
-                        # This ensures tables don't appear prematurely
-                        current_message_idx = len(
-                            [m for m in st.session_state.chat_history if m["role"] == "assistant"]) - 1
-                        if current_message_idx in st.session_state.chat_message_tables:
-                            df_idx = st.session_state.chat_message_tables[current_message_idx]
-                            if df_idx < len(st.session_state.persistent_dfs):
-                                df = st.session_state.persistent_dfs[df_idx]
-
-                                # Double-check that the dataframe has more than 1 row before displaying
-                                if len(df) > 1:
-                                    # Display download button
-                                    csv = df.to_csv(index=False).encode("utf-8")
-                                    st.download_button(
-                                        label="Download Full Dataset as CSV",
-                                        data=csv,
-                                        file_name=f"query_result_{current_message_idx}.csv",
-                                        mime="text/csv",
-                                        key=f"download_csv_{current_message_idx}_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
-                                    )
-
-                                    # Display the table
-                                    gb = GridOptionsBuilder.from_dataframe(df)
-                                    gb.configure_default_column(filter=True, sortable=True)
-                                    gridOptions = gb.build()
-                                    AgGrid(
-                                        df,
-                                        gridOptions=gridOptions,
-                                        height=400,
-                                        width='100%',
-                                        key=f"grid_{current_message_idx}_{df_idx}_{id(df)}",  # Unique key
-                                        update_mode=GridUpdateMode.VALUE_CHANGED
-                                    )
-
+                    with response_container:
+                        with st.chat_message("assistant"):
+                            st.markdown(natural_response)
+                            current_message_idx = len(
+                                [m for m in st.session_state.chat_history if m["role"] == "assistant"]) - 1
+                            if current_message_idx in st.session_state.chat_message_tables:
+                                df_idx = st.session_state.chat_message_tables[current_message_idx]
+                                if df_idx < len(st.session_state.persistent_dfs):
+                                    df = st.session_state.persistent_dfs[df_idx]
+                                    if len(df) > 1:
+                                        csv = df.to_csv(index=False).encode("utf-8")
+                                        st.download_button(
+                                            label="Download Full Dataset as CSV",
+                                            data=csv,
+                                            file_name=f"query_result_{current_message_idx}.csv",
+                                            mime="text/csv",
+                                            key=f"download_csv_{current_message_idx}_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+                                        )
+                                        gb = GridOptionsBuilder.from_dataframe(df)
+                                        gb.configure_default_column(filter=True, sortable=True)
+                                        gridOptions = gb.build()
+                                        AgGrid(
+                                            df,
+                                            gridOptions=gridOptions,
+                                            height=400,
+                                            width='100%',
+                                            key=f"grid_{current_message_idx}_{df_idx}_{id(df)}",
+                                            update_mode=GridUpdateMode.VALUE_CHANGED
+                                        )
                 except Exception as e:
                     natural_response = f"Error: {str(e)}"
                     save_query_result(
@@ -1129,11 +1115,9 @@ def main_app():
                     )
                     st.session_state.messages.append({"role": "assistant", "content": natural_response})
                     st.session_state.chat_history.append({"role": "assistant", "content": natural_response})
-
-                    with st.chat_message("assistant"):
-                        st.markdown(natural_response)
-
-
+                    with response_container:
+                        with st.chat_message("assistant"):
+                            st.markdown(natural_response)
 
             # # ---- Force immediate save after each message exchange ----
             # if AUTOSAVE_ENABLED:
