@@ -1098,6 +1098,8 @@ def main_app():
                             **2. TABLE-SPECIFIC RULES**
 
                                **2.1 PO_DETAILS_VIEW TABLE:**
+                                    1. ⚠️ **MANDATORY RULE: ALWAYS USE DOUBLE QUOTES ("")** ⚠️  
+                                                - **tablename and column name** of PO_DETAILS_VIEW **MUST BE ENCLOSED** in double quotes exactly as in the schema. 
                                **Query Templates**
                                 ## SQL Template for Multi-row PO_DETAILS_VIEW TABLE (Always Use for Table Outputs):
                                 SELECT 
